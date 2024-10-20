@@ -1,54 +1,187 @@
 /* Notes App*/
 
+package com.example.notes
 
-
-
-
-
-package easy.tuto.notespro
-
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import easy.tuto.notespro.ui.theme.NotesProTheme
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.unit.dp
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            NotesProTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
+data class Note(
+    val id: Int = 0,
+    var title: String = "",
+    var content: String = ""
+)
+
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "notes_data")
+val NOTES_KEY = stringPreferencesKey("notes")
+val notes = mutableStateListOf<Note>()
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NoteCreationScreen(
+    onSave: (Note) -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var content by remember { mutableStateOf("") }
+
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text("Create Note") },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                    }
                 }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .fillMaxSize()
+        ) {
+            OutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = { Text("Title") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(
+                value = content,
+                onValueChange = { content = it },
+                label = { Text("Content") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = { onSave(Note(title = title, content = content)) },
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Text("Save")
             }
         }
     }
 }
 
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
+fun NoteListScreen(notes: List<Note>, onAddNoteClick: () -> Unit) {
+    Scaffold(
+        floatingActionButton = {
+            Button(onClick = onAddNoteClick) {
+                Text("Add Note")
+            }
+        }
+    ) { innerPadding ->
+        LazyColumn(modifier = Modifier.padding(innerPadding)) {
+            items(notes) { note ->
+                NoteItem(note)
+            }
+        }
+    }
 }
 
-@Preview(showBackground = true)
 @Composable
-fun GreetingPreview() {
-    NotesProTheme {
-        Greeting("Android")
+fun NoteItem(note: Note) {
+    Card(modifier = Modifier.padding(8.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(text = note.title, style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = note.content, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+fun NotesApp() {
+    val navController = rememberNavController()
+    NavHost(navController = navController, startDestination = "noteList") {
+        composable("noteList") {
+            NoteListScreen(notes = notes, onAddNoteClick = { navController.navigate("noteCreation") })
+        }
+        composable("noteCreation") {
+            NoteCreationScreen(
+                onSave = { newNote ->
+                    notes.add(newNote)
+                    navController.navigate("noteList")
+                },
+                onNavigateBack = { navController.navigate("noteList") }
+            )
+        }
+    }
+}
+
+class NoteRepository(private val context: Context) {
+
+    suspend fun getAllNotes(): List<Note> {
+        val notesJson = context.dataStore.data.map { preferences ->
+            preferences[NOTES_KEY] ?: "[]"
+        }.first()
+        val type = object : TypeToken<List<Note>>() {}.type
+        return Gson().fromJson(notesJson, type) ?: emptyList()
+    }
+
+    suspend fun saveNotes(notes: List<Note>) {
+        val notesJson = Gson().toJson(notes)
+        context.dataStore.edit { preferences ->
+            preferences[NOTES_KEY] = notesJson
+        }
+    }
+}
+
+class MainActivity : ComponentActivity() {
+    private lateinit var noteRepository: NoteRepository
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        noteRepository = NoteRepository(this)
+
+        // Load notes on startup
+        runBlocking {
+            notes.addAll(noteRepository.getAllNotes())
+        }
+
+        setContent {
+            NotesApp()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Save notes when the app stops
+        runBlocking {
+            noteRepository.saveNotes(notes)
+        }
     }
 }
